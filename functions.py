@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import xmlrpc.client
 from streamlit_gsheets import GSheetsConnection
 import streamlit as st
+import altair as alt
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -110,6 +111,7 @@ class SuportFunction:
         return msg
     
     # create function to count Retase
+    @staticmethod
     def retaseGPS(data):
         data['geofences'].fillna('Unknown', inplace=True)
         index_timbangan = data[data.geofences.apply(lambda x: 'Stockpile KM 7' in x or 'Area Pabrik' in x)].index.tolist()
@@ -129,6 +131,28 @@ class SuportFunction:
 
         return len(evaluated.index.tolist())
     
+    # create function clasification unit status
+    @staticmethod
+    def unit_status_clasified(unitCondition, validasiWs, ignitionStatus, workingStatus):
+        # create condition
+        if unitCondition != 'Ready':
+            msg = f"{unitCondition} engine {ignitionStatus}"
+        else:
+            if validasiWs != 'Ready':
+                msg = f"{validasiWs} engine {ignitionStatus}"
+            else:
+                if workingStatus in ['OPR','IDLE']:
+                    if ignitionStatus in ['OFF']:
+                        msg = f"STD engine {ignitionStatus}"
+                    elif ignitionStatus in ['Unknown']:
+                        msg = f"GPS Error"
+                    else:
+                        msg = f"{workingStatus} engine {ignitionStatus}"
+                else:
+                    msg = f"STD engine {ignitionStatus}"
+        # return 
+        return msg
+
 # create class to GET data from APi
 class GetDataApi:
     # Methods untuk menarik data dari GSheet
@@ -149,7 +173,7 @@ class GetDataApi:
         url_odoo = "https://node3.solusienergiutama.com"
         db_odoo = "cvsa"
         username_odoo = 'dicky.gps105@gmail.com'
-        password_odoo = "lotongmanis0210"
+        password_odoo = "@Lifeislearning0210"
 
         # Attempting authentication with bypassed SSL verification
         common_odoo = xmlrpc.client.ServerProxy('{}/xmlrpc/2/common'.format(url_odoo), context=context_odoo) 
@@ -483,3 +507,66 @@ class TransformData:
 
         # return
         return summary
+
+# create class to group function transform visual data
+class TransformVisualData:
+    # transform - 1: jumlah utilisasi unit per status utilisasi
+    @staticmethod
+    def transform_fiz_1(data, kontrak, move_type):
+        # Filter data sesuai kontrak dan move_type
+        data = data[(data.kontrak == kontrak) & (data.move_type == move_type)]
+
+        # Hitung jumlah per utilisasi_status
+        data = data.groupby(['utilisasi_status'])['name_odoo'].count().reset_index()
+        data.columns = ['utilisasi_status', 'jumlah']
+
+        # Urutan dan daftar utilisasi_status yang tetap
+        status_list = pd.DataFrame({
+            'utilisasi_status': [
+                'OPR engine ON','IDLE engine ON','STD engine OFF','STD engine Unknown',
+                'BD engine ON','BD engine OFF','BD engine Unknown',
+                'ACD engine Unknown','Chasis Crack engine Unknown',
+                'GPS Error','KMS engine Unknown'
+            ]
+        })
+
+        # Merge agar urutan dan kategori tetap
+        data = status_list.merge(data, on='utilisasi_status', how='left')
+        data['jumlah'].fillna(0, inplace=True)
+
+        # Bar chart utama
+        bar_chart = alt.Chart(data).mark_bar().encode(
+            y=alt.Y('utilisasi_status:N', title='', 
+                    sort=status_list['utilisasi_status'].tolist(),
+                    axis=alt.Axis(labelLimit=200)), 
+            x=alt.X('jumlah:Q', title='Jumlah', scale=alt.Scale(nice=True, padding=20)), 
+            color=alt.Color('utilisasi_status:N',
+                            scale=alt.Scale(
+                                domain=status_list['utilisasi_status'].tolist(),
+                                range=[
+                                    '#b7d7a8','#6aa84f','#eb9999','#eb9999','#ffda66','#ffda66','#ffda66',
+                                    '#999999','#4e4e4e','#8e7cc3','#ffbd59'
+                                ]),
+                            legend=None
+            )
+        )
+
+        # Label jumlah di luar bar (hanya untuk nilai > 0)
+        text = alt.Chart(data[data['jumlah'] > 0]).mark_text(
+            align='left',
+            baseline='middle',
+            dx=15,               # Geser teks lebih jauh ke kanan
+            color='white',
+            fontWeight='bold',
+            fontSize=14,
+            stroke='black',      # Tambahkan outline agar tetap terbaca
+            strokeWidth=0.5
+        ).encode(
+            y=alt.Y('utilisasi_status:N', sort=status_list['utilisasi_status'].tolist()),
+            x='jumlah:Q',
+            text=alt.Text('jumlah:Q')
+        )
+
+        # Gabungkan chart dan teks
+        return (bar_chart + text).properties(width=750, height=350)
+
